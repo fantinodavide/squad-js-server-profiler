@@ -1,0 +1,4 @@
+**.*
+!server-profiler.js
+!README.MD
+!.gitignore
