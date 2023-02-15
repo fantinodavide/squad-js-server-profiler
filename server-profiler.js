@@ -3,6 +3,8 @@ import TpsLogger from './tps-logger.js';
 import { MessageAttachment } from "discord.js";
 import Path from 'path';
 import fs from 'fs';
+import { createGzip } from 'zlib';
+import { pipeline } from 'stream';
 
 export default class ServerProfiler extends DiscordBasePlugin {
     static get description() {
@@ -21,6 +23,11 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 description: 'The ID of the channel to send logs to.',
                 default: '',
                 example: '667741905228136459'
+            },
+            enableFileCompression: {
+                required: false,
+                description: '',
+                default: true
             }
         };
     }
@@ -81,7 +88,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
     async onTpsDrop(dt) {
         this.verbose(1, 'Detected TPS Drop', dt)
-        this.server.once('CSV_PROFILER_ENDED', (info) => {
+        this.server.once('CSV_PROFILER_ENDED', async (info) => {
             // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
             const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
@@ -89,11 +96,13 @@ export default class ServerProfiler extends DiscordBasePlugin {
             const profilerPath = Path.join(this.SquadGameDir, csvPath)
             this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
             this.verbose(1, 'CSV Profiler ENDED', profilerPath)
+            this.profilerStart();
 
-            this.sendDiscordCsvReport(profilerPath, csvName);
+            await this.sendDiscordCsvReport(profilerPath, csvName, () => {
+                fs.unlink(profilerPath);
+            });
             // console.log(this.TpsLogger.tickRates[ dt.id ]);
 
-            this.profilerStart();
         })
         await this.profilerStop();
     }
@@ -102,17 +111,41 @@ export default class ServerProfiler extends DiscordBasePlugin {
         await this.profilerStop();
     }
 
-    async sendDiscordCsvReport(csvPath, csvName) {
+    async sendDiscordCsvReport(csvPath, csvName, callback = () => { }) {
         this.verbose(1, `Sending ${csvName} in Discord channel with id: "${this.options.channelID}"`)
-        try {
-            await this.sendDiscordMessage({
-                files: [
-                    new MessageAttachment(fs.readFileSync(csvPath), csvName)
-                ]
-            })
-        } catch (error) {
-            this.verbose(1, 'Could not send discord message. Error: ', error)
+        const outputPath = csvPath + '.gz';
+
+        if (this.options.enableFileCompression) {
+            const gzip = createGzip();
+            const source = fs.createReadStream(csvPath);
+            pipeline(source, gzip,
+                async (data) => {
+                    try {
+                        await this.sendFileBufferToDiscord(data, csvName + '.gz')
+                    } catch (error) {
+                        this.verbose(1, 'Could not send discord message. Error: ', error)
+                    }
+                    callback();
+                },
+                async (err) => {
+                    if (err) {
+                        console.error('An error occurred:', err);
+                        process.exitCode = 1;
+                    }
+                }
+            );
+        } else {
+            await this.sendFileBufferToDiscord(fs.readFileSync(csvPath), csvName)
+            callback();
         }
+    }
+
+    sendFileBufferToDiscord(buffer, fileName) {
+        return this.sendDiscordMessage({
+            files: [
+                new MessageAttachment(buffer, fileName)
+            ]
+        })
     }
 
     matchProfilerLog(line) {
