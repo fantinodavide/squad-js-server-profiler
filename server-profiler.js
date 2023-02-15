@@ -50,6 +50,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.sendDiscordCsvReport = this.sendDiscordCsvReport.bind(this);
         this.sendFileBufferToDiscord = this.sendFileBufferToDiscord.bind(this);
         this.deleteProfilerCSV = this.deleteProfilerCSV.bind(this);
+        this.profilerStarting = this.profilerStarting.bind(this);
 
         this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
@@ -57,6 +58,8 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.warn = this.server.rcon.warn;
 
         this.deleteProtection = false;
+
+        this.restartTimeout = null;
 
         this.SquadGameDir = this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
     }
@@ -74,26 +77,27 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async mount() {
-        console.log(this.channel);
         this.verbose(1, 'Mounted.')
         // this.bindListeners();
         // console.log(this.server.logParser.processLine)
         this.server.on('ROUND_ENDED', this.roundEnded)
         this.server.on('TPS_DROP', this.onTpsDrop)
         this.server.on('CSV_PROFILER_ENDED', this.deleteProfilerCSV)
+        this.server.on('CSV_PROFILER_STARTING', this.profilerStarting)
         // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
         // setTimeout(() => {
         //     this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
         // }, 1000)
 
-        this.profilerRestart();
-        setInterval(this.profilerRestart, 10 * 60 * 1000);
-
-        // setTimeout(this.roundEnded, 2000)
+        this.roundEnded();
     }
 
     async unmount() {
         this.verbose(1, 'TpsLogger unmounted');
+    }
+
+    async profilerStarting(dt) {
+        this.restartTimeout = setTimeout(this.profilerRestart, 5 * 60 * 1000);
     }
 
     async onTpsDrop(dt) {
@@ -120,10 +124,11 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async roundEnded(info) {
-        await this.profilerStop();
+        await this.profilerRestart();
     }
 
     deleteProfilerCSV(info) {
+        clearTimeout(this.restartTimeout);
         if (this.deleteProtection) return;
         const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const profilerPath = Path.join(this.SquadGameDir, csvPath)
@@ -131,12 +136,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async sendDiscordCsvReport(csvPath, csvName, callback = () => { }) {
-        this.verbose(1, `Sending ${csvName} in Discord channel with id: "${this.options.channelID}"`)
+        this.verbose(1, `Processing file ${csvName}`)
         const outputPath = csvPath + '.gz';
 
         if (this.options.enableFileCompression) {
-            const gzip = createGzip();
             const source = fs.createReadStream(csvPath);
+            const gzip = createGzip()
             pipeline(source, gzip,
                 async (data) => {
                     try {
@@ -162,12 +167,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
     sendFileBufferToDiscord(buffer, fileName) {
         let client;
         if (this.options.discordWebhook) {
-            this.verbose(1, `Sending file to Discord using Webhook: ${this.options.discordWebhook}`)
+            this.verbose(1, `Sending ${fileName} to Discord using Webhook: ${this.options.discordWebhook}`)
             // const parsed = this.options.discordWebhook.match(/api\/webhooks\/(?<id>.+)\/(?<token>.+)/)
             // client = new WebhookClient({ id: parsed[ 1 ], token: parsed[ 2 ] });
             client = new WebhookClient({ url: this.options.discordWebhook });
         } else {
-            this.verbose(1, `Sending file to Discord channel: ${this.options.channelID}`)
+            this.verbose(1, `Sending ${fileName} to Discord channel: ${this.options.channelID}`)
             client = this.channel;
         }
 
