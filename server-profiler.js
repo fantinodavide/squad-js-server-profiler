@@ -1,10 +1,8 @@
 import DiscordBasePlugin from './discord-base-plugin.js';
 import TpsLogger from './tps-logger.js';
-import LogParser from '../../core/log-parser/index.js';
 import { MessageAttachment } from "discord.js";
-
-import async from 'async';
-import * as http from 'http';
+import Path from 'path';
+import fs from 'fs';
 
 export default class ServerProfiler extends DiscordBasePlugin {
     static get description() {
@@ -33,15 +31,19 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.matchProfilerLog = this.matchProfilerLog.bind(this);
         this.roundEnded = this.roundEnded.bind(this);
         this.onTpsDrop = this.onTpsDrop.bind(this);
-        this.csvProfilerEnded = this.csvProfilerEnded.bind(this);
         this.profilerStart = this.profilerStart.bind(this);
         this.profilerStop = this.profilerStop.bind(this);
         this.profilerRestart = this.profilerRestart.bind(this);
+        this.sendDiscordCsvReport = this.sendDiscordCsvReport.bind(this);
 
         this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
         this.broadcast = this.server.rcon.broadcast;
         this.warn = this.server.rcon.warn;
+
+
+        this.SquadGameDir = this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
+        console.log(this.SquadGameDir);
     }
 
     async profilerStart() {
@@ -63,7 +65,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.server.on('ROUND_ENDED', this.roundEnded)
         this.server.on('TPS_DROP', this.onTpsDrop)
         // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
+        // setTimeout(() => {
+        //     this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
+        // }, 1000)
 
+        this.profilerRestart();
+        setInterval(this.profilerRestart, 10 * 60 * 1000);
 
         // setTimeout(this.roundEnded, 2000)
     }
@@ -75,24 +82,37 @@ export default class ServerProfiler extends DiscordBasePlugin {
     async onTpsDrop(dt) {
         this.verbose(1, 'Detected TPS Drop', dt)
         this.server.once('CSV_PROFILER_ENDED', (info) => {
-            this.verbose(1, 'CSV Profiler ENDED', info)
-            this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = info.groups.csv_file_path;
+            // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
+
+            const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
+            const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
+            const profilerPath = Path.join(this.SquadGameDir, csvPath)
+            this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
+            this.verbose(1, 'CSV Profiler ENDED', profilerPath)
+
+            this.sendDiscordCsvReport(profilerPath, csvName);
             // console.log(this.TpsLogger.tickRates[ dt.id ]);
+
             this.profilerStart();
         })
         await this.profilerStop();
-
     }
 
     async roundEnded(info) {
         await this.profilerStop();
     }
 
-    csvProfilerEnded(dt) {
-        this.verbose(1, 'CSV Profiler ENDED', dt)
-        this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = dt.groups.csv_file_path;
-        console.log(this.TpsLogger.tickRates[ dt.id ]);
-        this.profilerStart();
+    async sendDiscordCsvReport(csvPath, csvName) {
+        this.verbose(1, `Sending ${csvName} in Discord channel with id: "${this.options.channelID}"`)
+        try {
+            await this.sendDiscordMessage({
+                files: [
+                    new MessageAttachment(fs.readFileSync(csvPath), csvName)
+                ]
+            })
+        } catch (error) {
+            this.verbose(1, 'Could not send discord message. Error: ', error)
+        }
     }
 
     matchProfilerLog(line) {
