@@ -1,6 +1,6 @@
 import DiscordBasePlugin from './discord-base-plugin.js';
 import TpsLogger from './tps-logger.js';
-import { MessageAttachment } from "discord.js";
+import { MessageAttachment, WebhookClient } from "discord.js";
 import Path from 'path';
 import fs from 'fs';
 import { createGzip } from 'zlib';
@@ -28,6 +28,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 required: false,
                 description: '',
                 default: true
+            },
+            discordWebhook: {
+                required: false,
+                description: '',
+                default: null,
+                example: "https://discord.com/api/webhooks/1234567890123456789/tttOOOkkkEEEnnn"
             }
         };
     }
@@ -42,15 +48,17 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.profilerStop = this.profilerStop.bind(this);
         this.profilerRestart = this.profilerRestart.bind(this);
         this.sendDiscordCsvReport = this.sendDiscordCsvReport.bind(this);
+        this.sendFileBufferToDiscord = this.sendFileBufferToDiscord.bind(this);
+        this.deleteProfilerCSV = this.deleteProfilerCSV.bind(this);
 
         this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
         this.broadcast = this.server.rcon.broadcast;
         this.warn = this.server.rcon.warn;
 
+        this.deleteProtection = false;
 
         this.SquadGameDir = this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
-        console.log(this.SquadGameDir);
     }
 
     async profilerStart() {
@@ -66,11 +74,13 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async mount() {
+        console.log(this.channel);
         this.verbose(1, 'Mounted.')
         // this.bindListeners();
         // console.log(this.server.logParser.processLine)
         this.server.on('ROUND_ENDED', this.roundEnded)
         this.server.on('TPS_DROP', this.onTpsDrop)
+        this.server.on('CSV_PROFILER_ENDED', this.deleteProfilerCSV)
         // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
         // setTimeout(() => {
         //     this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
@@ -87,6 +97,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async onTpsDrop(dt) {
+        this.deleteProtection = true;
         this.verbose(1, 'Detected TPS Drop', dt)
         this.server.once('CSV_PROFILER_ENDED', async (info) => {
             // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
@@ -98,8 +109,9 @@ export default class ServerProfiler extends DiscordBasePlugin {
             this.verbose(1, 'CSV Profiler ENDED', profilerPath)
             this.profilerStart();
 
-            await this.sendDiscordCsvReport(profilerPath, csvName, () => {
-                fs.unlink(profilerPath);
+            this.sendDiscordCsvReport(profilerPath, csvName, () => {
+                fs.unlink(profilerPath, () => { });
+                this.deleteProtection = false;
             });
             // console.log(this.TpsLogger.tickRates[ dt.id ]);
 
@@ -109,6 +121,13 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
     async roundEnded(info) {
         await this.profilerStop();
+    }
+
+    deleteProfilerCSV(info) {
+        if (this.deleteProtection) return;
+        const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
+        const profilerPath = Path.join(this.SquadGameDir, csvPath)
+        fs.unlink(profilerPath, () => { });
     }
 
     async sendDiscordCsvReport(csvPath, csvName, callback = () => { }) {
@@ -141,7 +160,16 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     sendFileBufferToDiscord(buffer, fileName) {
-        return this.sendDiscordMessage({
+        let client;
+        if (this.options.discordWebhook) {
+            // const parsed = this.options.discordWebhook.match(/api\/webhooks\/(?<id>.+)\/(?<token>.+)/)
+            // client = new WebhookClient({ id: parsed[ 1 ], token: parsed[ 2 ] });
+            client = new WebhookClient({ url: this.options.discordWebhook });
+        } else {
+            client = this.channel;
+        }
+
+        return client.send({
             files: [
                 new MessageAttachment(buffer, fileName)
             ]
