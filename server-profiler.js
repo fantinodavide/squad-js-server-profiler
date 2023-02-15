@@ -162,10 +162,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
     sendFileBufferToDiscord(buffer, fileName) {
         let client;
         if (this.options.discordWebhook) {
+            this.verbose(1, `Sending file to Discord using Webhook: ${this.options.discordWebhook}`)
             // const parsed = this.options.discordWebhook.match(/api\/webhooks\/(?<id>.+)\/(?<token>.+)/)
             // client = new WebhookClient({ id: parsed[ 1 ], token: parsed[ 2 ] });
             client = new WebhookClient({ url: this.options.discordWebhook });
         } else {
+            this.verbose(1, `Sending file to Discord channel: ${this.options.channelID}`)
             client = this.channel;
         }
 
