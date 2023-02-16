@@ -34,6 +34,21 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 description: '',
                 default: null,
                 example: "https://discord.com/api/webhooks/1234567890123456789/tttOOOkkkEEEnnn"
+            },
+            minimumPlayerCount: {
+                required: false,
+                description: '',
+                default: 5,
+            },
+            profilingFileDurationMinutes: {
+                required: false,
+                descritpion: '',
+                default: 10
+            },
+            storeProfilerFilesOnlyIfTpsDropDetected: {
+                required: false,
+                descritpion: '',
+                default: false
             }
         };
     }
@@ -51,12 +66,14 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.sendFileBufferToDiscord = this.sendFileBufferToDiscord.bind(this);
         this.deleteProfilerCSV = this.deleteProfilerCSV.bind(this);
         this.profilerStarting = this.profilerStarting.bind(this);
+        this.profilerEnded = this.profilerEnded.bind(this);
 
         this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
         this.broadcast = this.server.rcon.broadcast;
         this.warn = this.server.rcon.warn;
 
+        this.skipPlayerCheck = false;
         this.deleteProtection = false;
 
         this.restartTimeout = null;
@@ -65,7 +82,9 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async profilerStart() {
+        if (this.server.players.length < this.options.minimumPlayerCount && !this.skipPlayerCheck) return;
         await this.server.rcon.execute('AdminProfileServerCSV start')
+        this.skipPlayerCheck = false;
     }
     async profilerStop() {
         await this.server.rcon.execute('AdminProfileServerCSV stop')
@@ -82,7 +101,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         // console.log(this.server.logParser.processLine)
         this.server.on('ROUND_ENDED', this.roundEnded)
         this.server.on('TPS_DROP', this.onTpsDrop)
-        this.server.on('CSV_PROFILER_ENDED', this.deleteProfilerCSV)
+        this.server.on('CSV_PROFILER_ENDED', this.profilerEnded)
         this.server.on('CSV_PROFILER_STARTING', this.profilerStarting)
         // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
         // setTimeout(() => {
@@ -97,38 +116,44 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async profilerStarting(dt) {
-        this.restartTimeout = setTimeout(this.profilerRestart, 5 * 60 * 1000);
+        clearTimeout(this.restartTimeout);
+        this.restartTimeout = setTimeout(this.profilerRestart, this.options.profilingFileDurationMinutes * 60 * 1000);
     }
 
     async onTpsDrop(dt) {
         this.deleteProtection = true;
         this.verbose(1, 'Detected TPS Drop', dt)
-        this.server.once('CSV_PROFILER_ENDED', async (info) => {
-            // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
-
-            const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
-            const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
-            const profilerPath = Path.join(this.SquadGameDir, csvPath)
-            this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
-            this.verbose(1, 'CSV Profiler ENDED', profilerPath)
-            this.profilerStart();
-
-            this.sendDiscordCsvReport(profilerPath, csvName, () => {
-                fs.unlink(profilerPath, () => { });
-                this.deleteProtection = false;
-            });
-            // console.log(this.TpsLogger.tickRates[ dt.id ]);
-
+        this.server.once('CSV_PROFILER_ENDED', (info) => {
+            this.profilerEnded(info, dt)
         })
         await this.profilerStop();
     }
 
     async roundEnded(info) {
+        this.skipPlayerCheck = true;
         await this.profilerRestart();
     }
 
+    async profilerEnded(info, dt = null) {
+        const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
+        const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
+        const profilerPath = Path.join(this.SquadGameDir, csvPath)
+        if (dt) this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
+        this.verbose(1, 'CSV Profiler ENDED', profilerPath)
+        this.profilerStart();
+
+        if (this.options.storeProfilerFilesOnlyIfTpsDropDetected) {
+            this.deleteProfilerCSV(info)
+        } else {
+            this.sendDiscordCsvReport(profilerPath, csvName, () => {
+                fs.unlink(profilerPath, () => { });
+                this.deleteProtection = false;
+                this.deleteProfilerCSV(info)
+            });
+        }
+    }
+
     deleteProfilerCSV(info) {
-        clearTimeout(this.restartTimeout);
         if (this.deleteProtection) return;
         const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const profilerPath = Path.join(this.SquadGameDir, csvPath)
