@@ -75,6 +75,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
         this.skipPlayerCheck = false;
         this.deleteProtection = false;
+        this.profilerRunning = false;
 
         this.restartTimeout = null;
 
@@ -82,7 +83,10 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async profilerStart() {
-        if (this.server.players.length < this.options.minimumPlayerCount && !this.skipPlayerCheck) return;
+        const checkPlayerCount = (this.server.players.length < this.options.minimumPlayerCount && !this.skipPlayerCheck);
+        this.verbose(1, `Player count: ${this.server.players.length}:${checkPlayerCount} - SkipCheck: ${this.skipPlayerCheck} - Profiler running: ${this.profilerRunning}`)
+        if (checkPlayerCount || this.profilerRunning) return;
+
         await this.server.rcon.execute('AdminProfileServerCSV start');
         this.removeListener('CSV_PROFILER_ENDED', this.profilerStart);
         this.removeListener('CSV_PROFILER_ALREADY_STOPPED', this.profilerStart);
@@ -107,12 +111,13 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.server.on('TPS_DROP', this.onTpsDrop)
         this.server.on('CSV_PROFILER_ENDED', this.profilerEnded)
         this.server.on('CSV_PROFILER_STARTING', this.profilerStarting)
+        this.server.on('PLAYER_CONNECTED', this.profilerStart)
         // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
         // setTimeout(() => {
         //     this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
         // }, 1000)
 
-        this.roundEnded();
+        await this.profilerRestart();
     }
 
     async unmount() {
@@ -120,6 +125,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async profilerStarting(dt) {
+        this.profilerRunning = true;
         clearTimeout(this.restartTimeout);
         this.restartTimeout = setTimeout(this.profilerRestart, this.options.profilingFileDurationMinutes * 60 * 1000);
     }
@@ -139,6 +145,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     async profilerEnded(info, dt = null) {
+        this.profilerRunning = false;
         const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const profilerPath = Path.join(this.SquadGameDir, csvPath)
@@ -174,7 +181,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
             pipeline(source, gzip,
                 async (data) => {
                     try {
-                        await this.sendFileBufferToDiscord(data, csvName + '.gz')
+                        await this.sendFileBufferToDiscord(data, this.server.currentLayer.layerid + '_' + csvName + '.gz')
                     } catch (error) {
                         this.verbose(1, 'Could not send discord message. Error: ', error)
                     }
