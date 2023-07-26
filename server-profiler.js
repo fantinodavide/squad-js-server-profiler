@@ -89,8 +89,8 @@ export default class ServerProfiler extends DiscordBasePlugin {
         if (checkPlayerCount || this.profilerRunning) return;
 
         await this.server.rcon.execute('AdminProfileServerCSV start');
-        this.removeListener('CSV_PROFILER_ENDED', this.profilerStart);
-        this.removeListener('CSV_PROFILER_ALREADY_STOPPED', this.profilerStart);
+        this.server.removeListener('CSV_PROFILER_ENDED', this.profilerStart);
+        this.server.removeListener('CSV_PROFILER_ALREADY_STOPPED', this.profilerStart);
         this.skipPlayerCheck = false;
     }
     async profilerStop() {
