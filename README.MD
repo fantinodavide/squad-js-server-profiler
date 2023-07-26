@@ -8,6 +8,7 @@ Server Profiler manager plugin for SquadJS.
     "enabled": true,
     "discordClient": "discord",
     "channelID": "112233445566778899",
-    "profilingFileDurationMinutes": 120
+    "profilingFileDurationMinutes": 120,
+    "overrideSquadGameDir": "/home/container/SquadGame"
 }
 ```

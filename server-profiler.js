@@ -49,6 +49,11 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 required: false,
                 descritpion: '',
                 default: false
+            },
+            overrideSquadGameDir: {
+                required: false,
+                descritpion: 'squadserver folder SquadGame/Saved/Profiling',
+                default: null
             }
         };
     }
@@ -80,7 +85,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
         this.restartTimeout = null;
 
-        this.SquadGameDir = this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
+        this.SquadGameDir = this.options.overrideSquadGameDir || this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
     }
 
     async profilerStart() {
