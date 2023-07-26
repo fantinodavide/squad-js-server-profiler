@@ -1,5 +1,5 @@
 import DiscordBasePlugin from './discord-base-plugin.js';
-import TpsLogger from './tps-logger.js';
+// import TpsLogger from './tps-logger.js';
 import { MessageAttachment, WebhookClient } from "discord.js";
 import Path from 'path';
 import fs from 'fs';
@@ -67,8 +67,9 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.deleteProfilerCSV = this.deleteProfilerCSV.bind(this);
         this.profilerStarting = this.profilerStarting.bind(this);
         this.profilerEnded = this.profilerEnded.bind(this);
+        this.logLineReceived = this.logLineReceived.bind(this);
 
-        this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
+        // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
         this.broadcast = this.server.rcon.broadcast;
         this.warn = this.server.rcon.warn;
@@ -112,17 +113,22 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.server.on('CSV_PROFILER_ENDED', this.profilerEnded)
         this.server.on('CSV_PROFILER_STARTING', this.profilerStarting)
         this.server.on('PLAYER_CONNECTED', this.profilerStart)
-        // this.server.on('CSV_PROFILER_ENDED', this.csvProfilerEnded)
-        // setTimeout(() => {
-        //     this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
-        // }, 1000)
 
-        await this.profilerRestart();
+        this.server.logParser.logReader.reader.on('line', this.logLineReceived)
+
+        await this.profilerStart();
     }
 
     async unmount() {
         this.verbose(1, 'TpsLogger unmounted');
     }
+
+    // async checkProfilerRunning(callback){
+    //     this.profilerStart()
+    //     this.server.once('CSV_PROFILER_ALREADY_RUNNING', (info) => {
+    //         if(callback) callback(true);
+    //     })
+    // }
 
     async profilerStarting(dt) {
         this.profilerRunning = true;
@@ -149,7 +155,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         const csvName = info.groups.csv_file_path.match(/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const csvPath = info.groups.csv_file_path.match(/SquadGame\/.+\/\w+\(\d+_\d+\)\.csv/)[ 0 ];
         const profilerPath = Path.join(this.SquadGameDir, csvPath)
-        if (dt) this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
+        // if (dt && this.TpsLogger) this.TpsLogger.tickRates[ dt.id ].profiler_csv_path = csvPath;
         this.verbose(1, 'CSV Profiler ENDED', profilerPath)
         this.profilerStart();
 
@@ -219,12 +225,35 @@ export default class ServerProfiler extends DiscordBasePlugin {
         })
     }
 
+    async logLineReceived(dt) {
+        // this.verbose(1, `Received log line`, dt)
+        this.matchProfilerLog(dt);
+    }
+
     matchProfilerLog(line) {
-        const regex = /LogCsvProfiler\: Display\: Capture (?<state>\w+)(. CSV ID: (?<csv_id>\w+))?(. Writing CSV to file : (?<csv_file_path>.+))?/
-        const match = line.match(regex);
+        let regex = /LogCsvProfiler\: Display\: Capture (?<state>\w+)(. CSV ID: (?<csv_id>\w+))?(. Writing CSV to file : (?<csv_file_path>.+))?/
+        let match = line.match(regex);
         if (match) {
             const event = `CSV_PROFILER_${match.groups.state.toUpperCase()}`;
             this.server.emit(event, match)
+            this.verbose(1, 'Emitting event', event)
+        }
+
+        regex = /LogCsvProfiler: Warning: Capture Stop requested, but no capture was running!/
+        match = line.match(regex);
+        if (match) {
+            const event = `CSV_PROFILER_ALREADY_STOPPED`;
+            this.server.emit(event, match)
+            this.profilerRunning = false;
+            this.verbose(1, 'Emitting event', event)
+        }
+
+        regex = /LogCsvProfiler: Warning: Capture start requested, but a capture was already running/
+        match = line.match(regex);
+        if (match) {
+            const event = `CSV_PROFILER_ALREADY_RUNNING`;
+            this.server.emit(event, match)
+            this.profilerRunning = true;
             this.verbose(1, 'Emitting event', event)
         }
     }
