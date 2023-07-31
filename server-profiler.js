@@ -54,7 +54,12 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 required: false,
                 descritpion: 'squadserver folder SquadGame/Saved/Profiling',
                 default: null
-            }
+            },
+            simulateTpsDrops: {
+                required: false,
+                description: "",
+                default: false
+            },
         };
     }
 
@@ -73,6 +78,10 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.profilerStarting = this.profilerStarting.bind(this);
         this.profilerEnded = this.profilerEnded.bind(this);
         this.logLineReceived = this.logLineReceived.bind(this);
+        this.tickRateUpdated = this.tickRateUpdated.bind(this);
+        this.isTpsDrop = this.isTpsDrop.bind(this);
+        this.getLatestTpsRecord = this.getLatestTpsRecord.bind(this);
+        this.getAverageTps = this.getAverageTps.bind(this);
 
         // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
 
@@ -85,7 +94,10 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
         this.restartTimeout = null;
 
-        this.SquadGameDir = this.options.overrideSquadGameDir || this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
+        this.tickRates = []
+        this.duringTpsDrop = false;
+
+        this.SquadGameDir = this.options?.overrideSquadGameDir?.match(/(.+)(\/SquadGame.*)/)[ 1 ] || this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
     }
 
     async profilerStart() {
@@ -111,13 +123,16 @@ export default class ServerProfiler extends DiscordBasePlugin {
 
     async mount() {
         this.verbose(1, 'Mounted.')
+        this.verbose(1, 'SquadGame dir: ', this.SquadGameDir)
         // this.bindListeners();
         // console.log(this.server.logParser.processLine)
         this.server.on('ROUND_ENDED', this.roundEnded)
-        this.server.on('TPS_DROP', this.onTpsDrop)
+        this.server.on('PROFILER:TPS_DROP_DETECTED', this.onTpsDrop)
         this.server.on('CSV_PROFILER_ENDED', this.profilerEnded)
         this.server.on('CSV_PROFILER_STARTING', this.profilerStarting)
         this.server.on('PLAYER_CONNECTED', this.profilerStart)
+
+        this.server.on('TICK_RATE', this.tickRateUpdated)
 
         this.server.logParser.logReader.reader.on('line', this.logLineReceived)
 
@@ -192,7 +207,8 @@ export default class ServerProfiler extends DiscordBasePlugin {
             pipeline(source, gzip,
                 async (data) => {
                     try {
-                        await this.sendFileBufferToDiscord(data, this.server.currentLayer.layerid + '_' + csvName + '.gz')
+                        await this.sendFileBufferToDiscord(data, `${(this.server?.currentLayer?.layerid || 'UnknownLayer')}_${csvName}.gz`, this.duringTpsDrop ? '** :bangbang: TPS DROP DETECTED :bangbang: **' : '')
+                        this.duringTpsDrop = false;
                     } catch (error) {
                         this.verbose(1, 'Could not send discord message. Error: ', error)
                     }
@@ -211,7 +227,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         }
     }
 
-    sendFileBufferToDiscord(buffer, fileName) {
+    sendFileBufferToDiscord(buffer, fileName, messageContent = "") {
         let client;
         if (this.options.discordWebhook) {
             this.verbose(1, `Sending ${fileName} to Discord using Webhook: ${this.options.discordWebhook}`)
@@ -224,6 +240,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         }
 
         return client.send({
+            content: messageContent,
             files: [
                 new MessageAttachment(buffer, fileName)
             ]
@@ -261,5 +278,46 @@ export default class ServerProfiler extends DiscordBasePlugin {
             this.profilerRunning = true;
             this.verbose(1, 'Emitting event', event)
         }
+    }
+
+    tickRateUpdated(dt) {
+        const prevTps = this.tickRates[ this.getLatestTpsRecord() ]?.tickRate || 0
+        const tps = this.options.simulateTpsDrops && prevTps > this.getAverageTps(20) * 0.8 && this.tickRates.length > 20 ? this.getAverageTps(20) * 0.8 : dt.tickRate;
+        this.tickRates.push({
+            tickRate: tps,
+            averageTickRate: 0
+        })
+        this.verbose(1, 'TPS Update', `Handled: ${tps} - Real: ${dt.tickRate} - 20_Average: ${this.getAverageTps(20)} - 3_Average: ${this.getAverageTps(3)} - IsDrop: ${this.isTpsDrop() ? "YES" : "NO"} - History Length: ${this.tickRates.length}`, dt.time)
+
+        if (this.tickRates.length > 100) this.tickRates.shift();
+
+        const latestTpsRecordIndex = this.getLatestTpsRecord();
+        this.tickRates[ latestTpsRecordIndex ].averageTickRate = this.getAverageTps();
+        this.tickRates[ latestTpsRecordIndex ].id = latestTpsRecordIndex;
+        if (this.isTpsDrop()) {
+            this.verbose(1, 'Emitting PROFILER:TPS_DROP_DETECTED event')
+            this.server.emit('PROFILER:TPS_DROP_DETECTED', this.tickRates[ latestTpsRecordIndex ])
+        }
+
+        const amountOfTickratesForAvg = 3;
+        if (this.tickRates.slice(-amountOfTickratesForAvg).map(t => t.tickRate).reduce((prev, curr, i) => prev + curr, 0) < this.options.last3TPSThresholdForEndMatch * amountOfTickratesForAvg)
+            this.server.rcon.execute(`AdminEndMatch`)
+    }
+
+    getLatestTpsRecord() {
+        return this.tickRates.length == 0 ? 0 : this.tickRates.length - 1;
+    }
+
+    getAverageTps(recentCount = 10) {
+        const sliceLength = Math.min(this.tickRates.length, recentCount);
+        return this.tickRates.slice(this.tickRates.length - sliceLength).map(t => t.tickRate).reduce((acc, cur) => acc + cur, 0) / sliceLength || 0
+    }
+
+    isTpsDrop() {
+        this.duringTpsDrop = true;
+        setTimeout(() => {
+            this.duringTpsDrop = false
+        }, 10 * 1000)
+        return this.getAverageTps(20) * 0.85 > this.getAverageTps(3);//this.tickRates[ latestTpsRecordIndex ].tickRate
     }
 }
