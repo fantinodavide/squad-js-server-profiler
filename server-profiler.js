@@ -288,7 +288,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
             tickRate: tps,
             averageTickRate: 0
         })
-        this.verbose(1, 'TPS Update', `Handled: ${tps} - Real: ${dt.tickRate} - 20_Average: ${this.getAverageTps(20)} - 3_Average: ${this.getAverageTps(3)} - IsDrop: ${this.isTpsDrop() ? "YES" : "NO"} - History Length: ${this.tickRates.length}`, dt.time)
+        this.verbose(1, 'TPS Update', `Handled: ${tps} - Real: ${dt.tickRate} - 20_Average: ${this.getAverageTps(20)} - 5_Average: ${this.getAverageTps(5)} - IsDrop: ${this.isTpsDrop() ? "YES" : "NO"} - History Length: ${this.tickRates.length}`, dt.time)
 
         if (this.tickRates.length > 100) this.tickRates.shift();
 
@@ -315,16 +315,19 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     isTpsDrop() {
+        const isDrop = this.getAverageTps(20) * 0.80 > this.getAverageTps(3);//this.tickRates[ latestTpsRecordIndex ].tickRate
+
+        if (!isDrop) return false;
+
         this.options.profilingFileDurationMinutes = 5
         this.duringTpsDrop = true;
         setTimeout(() => {
             this.duringTpsDrop = false
         }, 10 * 1000)
-
         setTimeout(() => {
             this.options.profilingFileDurationMinutes = this.backupProfilingFileDurationMinutes
         }, 15 * 60 * 1000)
 
-        return this.getAverageTps(20) * 0.85 > this.getAverageTps(3);//this.tickRates[ latestTpsRecordIndex ].tickRate
+        return true;
     }
 }
