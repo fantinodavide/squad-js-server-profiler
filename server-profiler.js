@@ -84,6 +84,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.getAverageTps = this.getAverageTps.bind(this);
 
         // this.TpsLogger = this.server.plugins.find(p => p instanceof TpsLogger);
+        this.backupProfilingFileDurationMinutes = this.options.profilingFileDurationMinutes;
 
         this.broadcast = this.server.rcon.broadcast;
         this.warn = this.server.rcon.warn;
@@ -314,10 +315,16 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     isTpsDrop() {
+        this.options.profilingFileDurationMinutes = 5
         this.duringTpsDrop = true;
         setTimeout(() => {
             this.duringTpsDrop = false
         }, 10 * 1000)
+
+        setTimeout(() => {
+            this.options.profilingFileDurationMinutes = this.backupProfilingFileDurationMinutes
+        }, 15 * 60 * 1000)
+
         return this.getAverageTps(20) * 0.85 > this.getAverageTps(3);//this.tickRates[ latestTpsRecordIndex ].tickRate
     }
 }
