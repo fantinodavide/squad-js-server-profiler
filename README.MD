@@ -12,3 +12,4 @@ Server Profiler manager plugin for SquadJS.
     "overrideSquadGameDir": "/home/container/SquadGame"
 }
 ```
+`overrideSquadGameDir` is not required and can be avoided
