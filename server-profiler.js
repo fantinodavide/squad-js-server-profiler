@@ -96,6 +96,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.restartTimeout = null;
 
         this.tickRates = []
+        this.preTpsDropAverageTps = 0;
         this.duringTpsDrop = false;
 
         this.SquadGameDir = this.options?.overrideSquadGameDir?.match(/(.+)(\/SquadGame.*)/)[ 1 ] || this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
@@ -209,7 +210,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 async (data) => {
                     try {
                         await this.sendFileBufferToDiscord(data, `${(this.server?.currentLayer?.layerid || 'UnknownLayer')}_${csvName}.gz`, this.duringTpsDrop ? '** :bangbang: TPS DROP DETECTED :bangbang: **' : '')
-                        this.duringTpsDrop = false;
+                        // this.duringTpsDrop = false;
                     } catch (error) {
                         this.verbose(1, 'Could not send discord message. Error: ', error)
                     }
@@ -315,15 +316,27 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     isTpsDrop() {
-        const isDrop = this.getAverageTps(20) * 0.80 > this.getAverageTps(3);//this.tickRates[ latestTpsRecordIndex ].tickRate
+        const average20 = this.getAverageTps(20);
+        const average3 = this.getAverageTps(3);
+        const isDrop = average20 * 0.80 > average3;//this.tickRates[ latestTpsRecordIndex ].tickRate
 
-        if (!isDrop) return false;
+        if (!isDrop) {
+            this.preTpsDropAverageTps = average20;
+            const recoveredAfterDrop = average3 > average20 / 0.8;//this.tickRates[ latestTpsRecordIndex ].tickRate
+
+            if (recoveredAfterDrop) {
+                this.options.profilingFileDurationMinutes = this.backupProfilingFileDurationMinutes
+                this.duringTpsDrop = false;
+            }
+
+            return false;
+        }
 
         this.options.profilingFileDurationMinutes = 5
         this.duringTpsDrop = true;
-        setTimeout(() => {
-            this.duringTpsDrop = false
-        }, 10 * 1000)
+        // setTimeout(() => {
+        //     this.duringTpsDrop = false
+        // }, 10 * 1000)
         setTimeout(() => {
             this.options.profilingFileDurationMinutes = this.backupProfilingFileDurationMinutes
         }, 15 * 60 * 1000)
