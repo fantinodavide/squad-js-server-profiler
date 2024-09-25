@@ -1,6 +1,6 @@
 import DiscordBasePlugin from './discord-base-plugin.js';
 // import TpsLogger from './tps-logger.js';
-import { MessageAttachment, WebhookClient } from "discord.js";
+import { AttachmentBuilder, WebhookClient } from "discord.js";
 import Path from 'path';
 import fs from 'fs';
 import { createGzip } from 'zlib';
@@ -55,6 +55,11 @@ export default class ServerProfiler extends DiscordBasePlugin {
                 descritpion: 'squadserver folder SquadGame/Saved/Profiling',
                 default: null
             },
+            detectTPSDrops: {
+                required: false,
+                descritpion: 'in case of tps drops, the capture will be restart and sent to discord',
+                default: true
+            },
             simulateTpsDrops: {
                 required: false,
                 description: "",
@@ -98,6 +103,8 @@ export default class ServerProfiler extends DiscordBasePlugin {
         this.tickRates = []
         this.preTpsDropAverageTps = 0;
         this.duringTpsDrop = false;
+
+        this.lastTPSDrop = new Date(0);
 
         this.SquadGameDir = this.options?.overrideSquadGameDir?.match(/(.+)(\/SquadGame.*)/)[ 1 ] || this.server.options.logDir.replace(/\\/g, '/').match(/(.+)(\/SquadGame\/.*)/)[ 1 ]
     }
@@ -244,7 +251,7 @@ export default class ServerProfiler extends DiscordBasePlugin {
         return client.send({
             content: messageContent,
             files: [
-                new MessageAttachment(buffer, fileName)
+                new AttachmentBuilder(buffer, { name: fileName })
             ]
         })
     }
@@ -316,6 +323,10 @@ export default class ServerProfiler extends DiscordBasePlugin {
     }
 
     isTpsDrop() {
+        if (!this.options.detectTPSDrops) return false;
+
+        this.lastTPSDrop = Date.now();
+
         const average20 = this.getAverageTps(20);
         const average3 = this.getAverageTps(3);
         const isDrop = average20 * 0.80 > average3;//this.tickRates[ latestTpsRecordIndex ].tickRate
